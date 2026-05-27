@@ -1,0 +1,16 @@
+# Python setup.
+/venv/
+/venv12/
+
+# Rust build.
+/target/
+
+# Private network information.
+data/network.json
+data/nest_backhaul.pcap
+data/nest_backhaul_large.pcap
+data/router_mode.pcap
+
+# Copyrighted data.
+docs/modem-manual/
+docs/switch-manual/

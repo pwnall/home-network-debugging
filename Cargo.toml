@@ -1,0 +1,7 @@
+[workspace]
+
+members = ["crates/nest-wifi-pro-ethernet",
+  "crates/netgear-cm3000-config"
+, "crates/trendnet-teg3102ws-config"]
+
+resolver = "2"
