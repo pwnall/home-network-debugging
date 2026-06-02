@@ -36,6 +36,8 @@ Authentication is session-based using a JSON Web Token (JWT).
 | :--- | :--- | :--- | :--- |
 | System Status | GET | `/api/system/status` | Hardware/Firmware info. |
 | System Settings | GET | `/api/system/settings` | Device name, contact, etc. |
+| Password Change | PATCH | `/api/system/settings/account` | Manage administrator password. |
+| Management IP | GET/PATCH | `/api/system/settings/mgmtinterface` | Modify switch IP, mask, and gateway. |
 | Port Config | GET/PATCH | `/api/ports` | Detailed port settings (VLAN, speed, EAP). |
 | STP Global | GET/PATCH | `/api/stp` | Enable/Disable STP and global timers. |
 | RSTP Info | GET | `/api/stp/rstp` | Port roles/states in **RSTP mode**. (Err 2715 in MSTP) |
@@ -74,6 +76,24 @@ The following features were evaluated for their impact on Nest WiFi Pro wired ba
 - **Extended Endpoints**: The web UI often uses `_extended` versions of endpoints for updates (e.g., `/api/system/settings/jumboframe_extended`, `/api/ports/eee_extended`). These usually accept the simplified payload formats.
 - Always check the `errCode` in the response (0 is success).
 
+### Factory Reset and System Settings Anomalies
+
+#### Factory Reset
+- **Procedure**: Press and hold the physical reset button for 6-10 seconds. The port LEDs will turn off, indicating the reset is initiated.
+- **Default IP**: `192.168.10.200` (Management VLAN 1)
+- **Default Credentials**: Username `admin`, password `password`. Note that older documentation mentions `admin` as the default password, but empirical testing confirms it is `password`.
+- **Lockout Mechanism**: Entering an incorrect password 5 times triggers a lockout (API returns `errCode: 2606`), which persists until the lockout timer expires or the switch is rebooted/power-cycled. Note that the error code `2603` means "error password".
+
+#### Password Change API
+- **Endpoint**: `PATCH /api/system/settings/account`
+- **First Login**: On a factory-reset switch, the first password change must send a specific payload including `"isFirstChangePwd": true` and without an `oldPassword` field.
+- **Subsequent Logins**: Standard password changes require the `oldPassword` field within the array of account configurations.
+
+#### Management IP Change API
+- **Endpoint**: `PATCH /api/system/settings/mgmtinterface`
+- **Connection Drop Behavior**: When changing the switch's IP address, the switch applies the change immediately and does *not* close the HTTP connection gracefully or return an API response. This will cause automation tools to hang until the TCP timeout if they wait for an HTTP 200 OK.
+- **Workaround**: Automation tools must implement a race condition (e.g., `tokio::join!` in Rust) where they send the `PATCH` request and simultaneously begin polling the *new* IP address. If the new IP address responds to a GET request (like the index page), the IP change is considered successful, and the hanging connection can be dropped.
+
 ### 2. Command Line Interface (CLI)
 
 The CLI provides a familiar Cisco-like experience.
@@ -99,8 +119,8 @@ The Nest WiFi Pro relies on the **Spanning Tree Protocol (STP)** to detect wired
 - **BPDU Inspection**: Use `tcpdump -e -i <interface> stp` to see the source MAC addresses.
   - If the source MAC belongs to the switch (`78:2d:7e...`), the switch is participating in STP.
   - If the source MAC belongs to Google (`b8:7b:d4...`), the switch is transparently flooding BPDUs (or the Nest is the Root).
-- **Bridge Priority**: To allow the Nest WiFi Pro to remain the Root Bridge (Priority 30976), the switch priority should be set to a higher value (lower precedence), such as **61440**.
-- **Recommendation**: To ensure Nest backhaul works, **Enable STP** (preferably RSTP) on the switch, set the priority to `61440`, and configure all ports connected to Nest units as **Edge Ports**.
+- **Bridge Priority**: To force all Nest WiFi Pro units to use wired backhaul and avoid split-brain topologies, the switch priority must be set to the highest precedence (lowest value) of **4096**.
+- **Recommendation**: To ensure Nest backhaul works seamlessly, **Enable STP** (preferably RSTP) on the switch, set the priority to `4096`, and configure all ports connected to Nest units as **Edge Ports** with Path Cost `1`.
 
 #### STP Port Blocking Issue
 In a mesh environment, Nest WiFi Pro units maintain a wireless backhaul while simultaneously attempting to establish a wired backhaul. This creates a physical loop that standard Spanning Tree algorithms will detect and block.

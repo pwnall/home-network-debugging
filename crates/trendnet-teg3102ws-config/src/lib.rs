@@ -147,6 +147,26 @@ pub struct SystemSettings {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MgmtInterface {
+    #[serde(rename = "IP")]
+    pub ip: String,
+    pub configuration: String,
+    #[serde(rename = "defaultGateway")]
+    pub default_gateway: String,
+    #[serde(rename = "dhcpOption43")]
+    pub dhcp_option_43: String,
+    #[serde(rename = "dns1IP")]
+    pub dns1_ip: String,
+    #[serde(rename = "dns2IP")]
+    pub dns2_ip: String,
+    pub submask: String,
+    #[serde(rename = "uplinkPort")]
+    pub uplink_port: String,
+    #[serde(rename = "vlanID")]
+    pub vlan_id: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SystemStatus {
     #[serde(rename = "deviceName")]
     pub device_name: String,
@@ -381,6 +401,130 @@ impl SwitchClient {
 
         let restful_res = resp.get("restful_res").context("Missing restful_res")?;
         Ok(serde_json::from_value(restful_res.clone())?)
+    }
+
+    pub async fn change_password(
+        &self,
+        username: &str,
+        new_password: &str,
+        is_first_login: bool,
+        old_password: Option<&str>,
+    ) -> Result<()> {
+        let url = self.base_url.join("system/settings/account")?;
+
+        let payload = if is_first_login {
+            serde_json::json!({
+                "isFirstChangePwd": true,
+                "accountConfs": [{
+                    "userName": username,
+                    "password": new_password,
+                    "privilegeType": "Admin"
+                }]
+            })
+        } else {
+            let old_pwd = old_password.unwrap_or("");
+            serde_json::json!([{
+                "userName": username,
+                "password": new_password,
+                "oldPassword": old_pwd,
+                "privilegeType": "Admin"
+            }])
+        };
+
+        let resp: RestfulRes<GenericResponse> = self
+            .client
+            .patch(url)
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.token.as_ref().unwrap()),
+            )
+            .json(&payload)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        if resp.restful_res.err_code != 0 {
+            return Err(anyhow::anyhow!("API Error: {}", resp.restful_res.message));
+        }
+        Ok(())
+    }
+
+    pub async fn get_mgmt_interface(&self) -> Result<MgmtInterface> {
+        let res: serde_json::Value = self.get_request("system/settings/mgmtinterface").await?;
+        let mgmt = res.get("mgmtInterface").context("Missing mgmtInterface")?;
+        Ok(serde_json::from_value(mgmt.clone())?)
+    }
+
+    pub async fn patch_mgmt_interface(&self, config: &MgmtInterface) -> Result<()> {
+        let url = self.base_url.join("system/settings/mgmtinterface")?;
+        let req = self
+            .client
+            .patch(url)
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.token.as_ref().unwrap()),
+            )
+            .json(&config);
+
+        let new_ip = config.ip.clone();
+
+        let patch_task = async {
+            match req.send().await {
+                Ok(resp) => {
+                    if let Ok(parsed) = resp.json::<RestfulRes<GenericResponse>>().await
+                        && parsed.restful_res.err_code != 0 {
+                            return Err(anyhow::anyhow!("API Error: {}", parsed.restful_res.message));
+                        }
+                    Ok(())
+                }
+                Err(e) => Err(anyhow::anyhow!("Request error: {}", e)),
+            }
+        };
+
+        let poll_task = async {
+            let new_url = format!("http://{}/", new_ip);
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(1))
+                .build()
+                .unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            loop {
+                if let Ok(res) = client.get(&new_url).send().await
+                    && res.status().is_success() {
+                        return Ok::<(), anyhow::Error>(());
+                    }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        };
+
+        let (patch_res, poll_res) = tokio::join!(
+            async {
+                tokio::time::timeout(std::time::Duration::from_secs(10), patch_task)
+                    .await
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("Patch task timed out")))
+            },
+            async {
+                tokio::time::timeout(std::time::Duration::from_secs(15), poll_task)
+                    .await
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("Poll task timed out")))
+            }
+        );
+
+        if poll_res.is_ok() {
+            Ok(())
+        } else if let Err(e) = patch_res {
+            if e.to_string().contains("API Error") {
+                Err(e)
+            } else {
+                Err(anyhow::anyhow!(
+                    "Failed to verify IP change. Patch error: {}",
+                    e
+                ))
+            }
+        } else {
+            poll_res
+        }
     }
 
     pub async fn get_system_status(&self) -> Result<SystemStatus> {

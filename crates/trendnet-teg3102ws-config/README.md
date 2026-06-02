@@ -49,6 +49,12 @@ cargo run -p trendnet-teg3102ws-config -- system-settings
 # Update system location
 cargo run -p trendnet-teg3102ws-config -- system-settings --location "Lab Environment"
 
+# Set the switch management IP address and subnet mask
+cargo run -p trendnet-teg3102ws-config -- set-ip --ip 192.168.10.201 --mask 255.255.255.0
+
+# Set the administrator password (use --first-login if this is the factory default password change)
+cargo run -p trendnet-teg3102ws-config -- set-password --password "new_secure_password" --first-login
+
 # Reboot the switch
 cargo run -p trendnet-teg3102ws-config -- reboot
 
@@ -77,7 +83,7 @@ cargo run -p trendnet-teg3102ws-config -- rstp-ports
 cargo run -p trendnet-teg3102ws-config -- cist-ports
 
 # Enable STP with a specific protocol and priority
-cargo run -p trendnet-teg3102ws-config -- set-stp --enable true --protocol rstp --priority 32768
+cargo run -p trendnet-teg3102ws-config -- set-stp --enable true --protocol rstp --priority 4096
 ```
 
 **Port Configuration**

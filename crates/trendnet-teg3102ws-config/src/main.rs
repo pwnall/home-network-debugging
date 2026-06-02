@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::fs;
 use std::path::PathBuf;
-use trendnet_teg3102ws_config::{CliConfig, LbdConfig, NetworkConfig, StpConfig, SwitchClient};
+use trendnet_teg3102ws_config::{CliConfig, LbdConfig, StpConfig, SwitchClient};
 
 /// The command-line interface configuration for the TRENDnet switch utility.
 #[derive(Parser)]
@@ -11,6 +11,10 @@ struct Cli {
     /// Path to the network configuration JSON file containing switch credentials.
     #[arg(short, long, default_value = "data/network.json")]
     config: PathBuf,
+
+    /// Key in the JSON configuration for the target switch.
+    #[arg(short, long, default_value = "switch")]
+    switch_key: String,
 
     /// The specific command to execute.
     #[command(subcommand)]
@@ -163,6 +167,30 @@ enum Commands {
         #[arg(long)]
         state: String,
     },
+    /// Set the management IP address
+    SetIp {
+        /// New IP address (e.g. 192.168.10.201)
+        #[arg(long)]
+        ip: String,
+        /// New subnet mask (e.g. 255.255.255.0)
+        #[arg(long, default_value = "255.255.255.0")]
+        mask: String,
+        /// Default gateway (optional)
+        #[arg(long, default_value = "")]
+        gateway: String,
+    },
+    /// Set the administrator password
+    SetPassword {
+        /// The new password to set
+        #[arg(long)]
+        password: String,
+        /// Is this the first login (password change forced)?
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        first_login: bool,
+        /// The old password (required if not first login)
+        #[arg(long)]
+        old_password: Option<String>,
+    },
     /// Set Jumbo Frame configuration
     SetJumboFrame {
         /// Frame size
@@ -212,14 +240,18 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let config_content = fs::read_to_string(&cli.config)?;
-    let network_config: NetworkConfig = serde_json::from_str(&config_content)?;
+    let network_json: serde_json::Value = serde_json::from_str(&config_content)?;
 
-    let mut client = SwitchClient::new(&network_config.switch.ip)?;
+    let switch_config_value = network_json
+        .get(&cli.switch_key)
+        .ok_or_else(|| anyhow::anyhow!("Switch key '{}' not found in config", cli.switch_key))?;
+
+    let switch_config: trendnet_teg3102ws_config::SwitchConfig =
+        serde_json::from_value(switch_config_value.clone())?;
+
+    let mut client = SwitchClient::new(&switch_config.ip)?;
     client
-        .login(
-            &network_config.switch.username,
-            &network_config.switch.password,
-        )
+        .login(&switch_config.username, &switch_config.password)
         .await?;
 
     match cli.command {
@@ -237,6 +269,9 @@ async fn main() -> Result<()> {
             println!("    temperature: {},", status.temperature);
             println!("    up_time: {},", status.up_time);
             println!("}}");
+
+            let mgmt = client.get_mgmt_interface().await?;
+            println!("MgmtInterface: {}", serde_json::to_string_pretty(&mgmt)?);
         }
         Commands::SystemSettings {
             name,
@@ -538,6 +573,29 @@ async fn main() -> Result<()> {
         Commands::SetDhcpTrust { id, state } => {
             client.patch_dhcp_snooping_trust_ports(&id, &state).await?;
             println!("Port {} DHCP Trust state updated to {}.", id, state);
+        }
+        Commands::SetIp { ip, mask, gateway } => {
+            let mut mgmt = client.get_mgmt_interface().await?;
+            mgmt.ip = ip.clone();
+            mgmt.submask = mask.clone();
+            mgmt.default_gateway = gateway.clone();
+            client.patch_mgmt_interface(&mgmt).await?;
+            println!("Management IP address updated to {}. Please reconnect.", ip);
+        }
+        Commands::SetPassword {
+            password,
+            first_login,
+            old_password,
+        } => {
+            client
+                .change_password(
+                    &switch_config.username,
+                    &password,
+                    first_login,
+                    old_password.as_deref(),
+                )
+                .await?;
+            println!("Password updated successfully.");
         }
         Commands::SetJumboFrame { size } => {
             client.patch_jumbo_frame_config(size).await?;

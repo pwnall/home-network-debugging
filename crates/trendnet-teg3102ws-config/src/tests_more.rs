@@ -482,3 +482,129 @@ async fn test_eee_config() -> Result<()> {
     client.patch_eee_config(1, true).await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn test_get_mgmt_interface() -> Result<()> {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/system/settings/mgmtinterface"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "restful_res": {
+                "mgmtInterface": {
+                    "IP": "192.168.10.200",
+                    "configuration": "static",
+                    "defaultGateway": "",
+                    "dhcpOption43": "",
+                    "dns1IP": "0.0.0.0",
+                    "dns2IP": "0.0.0.0",
+                    "submask": "255.255.255.0",
+                    "uplinkPort": "0",
+                    "vlanID": 1
+                },
+                "errCode": 0,
+                "message": "OK"
+            }
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let mut client = SwitchClient::new(&mock_server.address().to_string())?;
+    client.token = Some("test-token".to_string());
+
+    let mgmt = client.get_mgmt_interface().await?;
+    assert_eq!(mgmt.ip, "192.168.10.200");
+    assert_eq!(mgmt.submask, "255.255.255.0");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_patch_mgmt_interface() -> Result<()> {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("PATCH"))
+        .and(path("/api/system/settings/mgmtinterface"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "restful_res": {
+                "errCode": 0,
+                "message": "OK"
+            }
+        })))
+        .mount(&mock_server)
+        .await;
+        
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+
+    let mut client = SwitchClient::new(&mock_server.address().to_string())?;
+    client.token = Some("test-token".to_string());
+    
+    let mock_addr = mock_server.address().to_string();
+    let new_ip = mock_addr;
+    
+    let config = MgmtInterface {
+        ip: new_ip,
+        configuration: "static".to_string(),
+        default_gateway: "".to_string(),
+        dhcp_option_43: "".to_string(),
+        dns1_ip: "0.0.0.0".to_string(),
+        dns2_ip: "0.0.0.0".to_string(),
+        submask: "255.255.255.0".to_string(),
+        uplink_port: "0".to_string(),
+        vlan_id: 1,
+    };
+
+    client.patch_mgmt_interface(&config).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_change_password_first_login() -> Result<()> {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("PATCH"))
+        .and(path("/api/system/settings/account"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "restful_res": {
+                "errCode": 0,
+                "message": "OK"
+            }
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let mut client = SwitchClient::new(&mock_server.address().to_string())?;
+    client.token = Some("test-token".to_string());
+
+    client
+        .change_password("admin", "newpassword123", true, None)
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_change_password_subsequent_login() -> Result<()> {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("PATCH"))
+        .and(path("/api/system/settings/account"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "restful_res": {
+                "errCode": 0,
+                "message": "OK"
+            }
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let mut client = SwitchClient::new(&mock_server.address().to_string())?;
+    client.token = Some("test-token".to_string());
+
+    client
+        .change_password("admin", "newpassword123", false, Some("oldpassword456"))
+        .await?;
+    Ok(())
+}
